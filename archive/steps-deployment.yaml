@@ -1,0 +1,115 @@
+parameters:
+
+- name: environment
+  type: string
+
+- name: accountName
+  type: string
+
+- name: foldersToDeploy
+  type: object
+
+- name: mainAccountLocatorRegion
+  type: string
+
+- name: keyVaultSubscriptionName
+  type: string
+
+- name: keyVaultName
+  type: string
+
+- name: environmentName
+  type: string
+
+- name: sfUsername
+  type: string
+
+- name: sfRole
+  type: string
+
+- name: sfWarehouse
+  type: string  
+
+- name: schemachangeControlDb
+  type: string
+
+steps:
+
+    - template: steps-pre-deployment.yaml
+      parameters:
+          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+          keyVaultName: ${{ parameters.keyVaultName }} 
+          dataEngineeringServicePasswordSecretName: 'DATAENGINEERINGSERVICE'
+
+    - script: |
+        cd ~/bin 
+        ACCOUNT_LOCATOR=$(./snowsql -a ${{ parameters.mainAccountLocatorRegion }} -u $(mainAccountUserName) -w $(mainAccountWarehouseName) -r 'ORGADMIN' -q "CALL util_db.utils.get_account_locator('${{ parameters.accountName }}');"  -o friendly=False -o header=False -o output_format=plain -o timing=False -o exit_on_error=true)
+        echo $ACCOUNT_LOCATOR
+        echo "##vso[task.setvariable variable=accountLocatorRegion;]$ACCOUNT_LOCATOR"  
+      displayName: Try get account locator
+      env:
+        SNOWSQL_PWD: $(mainAccountPasswordKvSecret)      
+
+    - task: Bash@3
+      condition: eq(variables.accountLocatorRegion, 'NULL')
+      displayName: Fail if account does not exist
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo 'Unable to find account'
+          exit 1       
+
+    - task: AzureKeyVault@1
+      displayName: 'Get deployment_pipeline_usr password from key vault'
+      inputs:
+        azureSubscription: ${{ parameters.keyVaultSubscriptionName }} 
+        KeyVaultName: ${{ parameters.keyVaultName }}
+        SecretsFilter: $(sfUserPasswordSecretName)
+        RunAsPreJob: false         
+
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(accountLocatorRegion)' -u ${{ parameters.sfUsername}} -w ${{ parameters.sfWarehouse}} -r ${{ parameters.sfRole}} -o variable_substitution=true -o exit_on_error=true -q "CREATE TABLE IF NOT EXISTS util_db.public.devops_pipeline_runs (pipeline_run_start TIMESTAMP_NTZ(9), pipeline_run_end TIMESTAMP_NTZ(9), pipeline_name  VARCHAR(4000), build_number  VARCHAR(4000), snowflake_account VARCHAR(4000), env_variable VARCHAR(4000), trigger_event  VARCHAR(4000), environment_name VARCHAR(4000), source_branch  VARCHAR(4000), source_version  VARCHAR(4000), commit_comment  VARCHAR(4000), queued_by  VARCHAR(4000), triggered_by_id VARCHAR(4000), build_uri  VARCHAR(4000), job_status  VARCHAR(4000), agent_os  VARCHAR(4000));" 
+      displayName: Create table devops_pipeline_runs if not exists
+      condition: ne(variables.accountLocatorRegion, 'NULL')
+      env:
+        SNOWSQL_PWD: $(sfUserPasswordKvSecret)
+
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(accountLocatorRegion)' -u ${{ parameters.sfUsername}} -w ${{ parameters.sfWarehouse}} -r ${{ parameters.sfRole}} -o variable_substitution=true -o exit_on_error=true -q "INSERT INTO util_db.public.devops_pipeline_runs SELECT SYSDATE(),NULL,'$(Build.DefinitionName)','$(Build.BuildNumber)','$(accountLocatorRegion)','${{ parameters.environment }}','$(Build.Reason)','${{ parameters.environmentName }}-${{ parameters.environment }}','$(Build.SourceBranch)','$(Build.SourceVersion)', NULL as commit_comment,'$(Build.QueuedBy)','$(Build.RequestedForId)','$(Build.BuildUri)','$(Agent.JobStatus)','$(Agent.OS)' " 
+      displayName: Insert pipeline build variables
+      env:
+        SNOWSQL_PWD: $(sfUserPasswordKvSecret)
+
+    - powershell: |
+        # Get customer abbreviation from account name
+        $accountName = '${{ parameters.accountName }}'
+        $customerAbbrv = ($accountName -replace('$(validRegionIdentifiers)', '')).ToLower()
+        echo "##vso[task.setvariable variable=customerAbbrv]$customerAbbrv"
+
+        # Get Azure Region from $accountLocatorRegion
+        $accountLocatorRegion = '$(accountLocatorRegion)'
+        $accountLocatorRegionParts = $accountLocatorRegion.split('.')
+        $accountIdentifier = $accountLocatorRegionParts[0].replace('-', '')
+        echo "##vso[task.setvariable variable=accountIdentifier;]$accountIdentifier"  
+
+      displayName: Resolve variables
+      
+    - ${{ each folder in parameters.foldersToDeploy }}: 
+      - script: schemachange -f $(System.DefaultWorkingDirectory)/${{ folder }} -a '$(accountLocatorRegion)' -u ${{ parameters.sfUsername }} -w ${{ parameters.sfWarehouse }} -r ${{ parameters.sfRole }} -d ${{ parameters.sfUsername }} -c ${{parameters.schemachangeControlDb }}.SCHEMACHANGE.CHANGE_HISTORY --create-change-history-table --vars '{"accountName":"${{ parameters.accountName }}","environment":"${{ parameters.environment }}","uppercaseEnvironment":"${{ upper(parameters.environment) }}","customerAbbrv":"$(customerAbbrv)","accountIdentifier":"$(accountIdentifier)"}' -v
+        displayName: 'Deploy [${{ folder }}]'
+        env:
+          SNOWFLAKE_PASSWORD: $(sfUserPasswordKvSecret)     
+
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(accountLocatorRegion)' -u ${{ parameters.sfUsername}} -w ${{ parameters.sfWarehouse}} -r ${{ parameters.sfRole}} -o exit_on_error=true -q "UPDATE util_db.public.devops_pipeline_runs SET pipeline_run_end = SYSDATE() WHERE pipeline_name = '$(Build.DefinitionName)' AND build_number = '$(Build.BuildNumber)' AND pipeline_run_end is NULL" 
+      displayName: Update pipeline run end
+      env:
+        SNOWSQL_PWD: $(sfUserPasswordKvSecret)
+
+    - template: steps-post-deployment.yaml
+      parameters:
+          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+          keyVaultName: ${{ parameters.keyVaultName }} 

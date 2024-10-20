@@ -1,0 +1,54 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: accounts
+  type: object
+  #default: ['cr03187','bd87466','pn13441','cd46354','yk93061','ee96414','lj53023','kw66019','hf25304','ur49221','dx96049','nu32566']
+  default: ['ft12376']
+
+- name: foldersToDeploy
+  type: object
+  default: ['account_level/migrations']
+  
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+- name: schemachangeControlDb
+  type: string
+  default: 'util_db'  
+
+variables:
+# Account level script should be always production
+- name: environmentName
+  value: data-core-snowflake-prd
+- template: vars/vars-global.yaml
+
+jobs:
+- ${{ each account in parameters.accounts }}:
+  - deployment: Deploy_${{ account }}
+    displayName: Deploy ${{ account }}
+    environment: ${{ variables.environmentName }} 
+    variables: 
+      - template: vars/vars-${{ account }}.yaml
+    strategy:
+      runOnce:
+        deploy:
+          steps:      
+            - template: steps-account-deployment.yaml
+              parameters:
+                environment: prd
+                environmentName: ${{ variables.environmentName }} 
+                account: ${{ account }}
+                keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                keyVaultName: ${{ parameters.keyVaultName }}
+                foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                dbName: ${{ parameters.schemachangeControlDb }}

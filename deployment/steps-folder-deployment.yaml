@@ -1,0 +1,76 @@
+parameters:
+- name: account
+  type: string
+
+- name: sfAccountName
+  type: string
+
+- name: environment
+  type: string
+
+- name: region
+  type: string
+
+- name: folder
+  type: string
+
+- name: sfUsername
+  type: string
+
+- name: acctPwd
+  type: string
+
+- name: sfRole
+  type: string
+
+- name: sfWarehouse
+  type: string
+
+- name: dbName
+  type: string
+
+- name: azureRegionIdentifier
+  type: string
+
+- name: stagingStorageAccountName
+  type: string
+  
+- name: deploymentType
+  type: string
+
+steps:
+    - bash: echo "Deploy folder '${{ parameters.folder }}"
+      displayName: "# Deploy folder '${{ parameters.folder }}'"
+
+    - script: 
+            |
+            echo '##vso[task.setvariable variable=environment]${{ parameters.environment }}'
+            echo '##vso[task.setvariable variable=uppercaseEnvironment]${{ upper(parameters.environment) }}'
+            echo '##vso[task.setVariable variable=customFolderExists]false'
+      displayName: Initialize variables
+
+    - script: schemachange -f $(PROJECT_FOLDER)/${{parameters.folder }} -a ${{parameters.sfAccountName }}  -u $(sfUsername) -r $(sfRole) -w $(sfWarehouse)  -d ${{parameters.dbName }}  -c ${{parameters.dbName }}.SCHEMACHANGE.CHANGE_HISTORY --create-change-history-table --vars '{"deploymentType":"${{parameters.deploymentType }}","customerName":"$(customerName)","accountName":"${{parameters.account }}","environment":"$(environment)","uppercaseEnvironment":"$(uppercaseEnvironment)","accountType":"$(accountType)","azureRegionIdentifier":"$(azureRegionIdentifier)", "defaultRole":"$(sfRole)", "stagingStorageAccountName":"$(stagingStorageAccountName)"}' -v
+      displayName: ${{parameters.folder }} sql scripts
+      env:
+        SNOWFLAKE_PASSWORD: ${{ parameters.acctPwd }}
+
+    - task: Bash@3
+      displayName: Checking folder '/custom_code/$(customerName)/${{parameters.folder }}'
+      inputs:
+        targetType: inline
+        script: 
+            |
+            if [ -d $(PROJECT_FOLDER)/custom_code/$(customerName)/${{parameters.folder }} ]; then
+              echo "##vso[task.setVariable variable=customFolderExists]true"
+              echo "Custom code deployment."
+            else
+              echo "Skip custom code deployment."
+            fi
+
+    - script: schemachange -f $(PROJECT_FOLDER)/custom_code/$(customerName)/${{parameters.folder }} -a ${{parameters.sfAccountName }} -u $(sfUsername) -r $(sfRole) -w $(sfWarehouse)  -d ${{parameters.dbName }}  -c ${{parameters.dbName }}.utils.change_history_custom_code --create-change-history-table --vars '{"customerName":"$(customerName)","accountName":"${{parameters.account }}","environment":"$(environment)","uppercaseEnvironment":"$(uppercaseEnvironment)","accountType":"$(accountType)","azureRegionIdentifier":"$(azureRegionIdentifier)", "defaultRole":"$(sfRole)", "stagingStorageAccountName":"$(stagingStorageAccountName)"}'
+      condition: eq(variables.customFolderExists, 'true')
+      displayName: ${{ parameters.account }} custom sql scripts
+      env:
+        SNOWFLAKE_PASSWORD: ${{ parameters.acctPwd }}
+
+

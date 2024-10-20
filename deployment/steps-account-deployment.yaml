@@ -1,0 +1,87 @@
+parameters:
+- name: keyVaultSubscriptionName
+  type: string
+
+- name: keyVaultName
+  type: string
+
+- name: dbName
+  type: string
+
+- name: environment
+  type: string
+
+- name: environmentName
+  type: string
+
+- name: account
+  type: string
+
+- name: foldersToDeploy
+  type: object
+
+- name: stagingStorageAccountName
+  type: string
+
+- name: deploymentType
+  type: string
+
+#- name: adhocFolders
+#  type: object
+#  default: null
+
+steps:
+    - template: steps-pre-deployment-realEstate.yaml
+      parameters:
+          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+          keyVaultName: ${{ parameters.keyVaultName }} 
+
+    - bash: echo '##vso[task.setvariable variable=sfAccountName]${{ parameters.account }}.$(region)'
+      displayName: Set account ${{ parameters.account }}.$(region)
+
+    # create table if not exists
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -o variable_substitution=true -q "CREATE TABLE IF NOT EXISTS util_db.public.devops_pipeline_runs (pipeline_run_start TIMESTAMP_NTZ(9), pipeline_run_end TIMESTAMP_NTZ(9), pipeline_name  VARCHAR(4000), build_number  VARCHAR(4000), snowflake_account VARCHAR(4000), env_variable VARCHAR(4000), trigger_event  VARCHAR(4000), environment_name VARCHAR(4000), source_branch  VARCHAR(4000), source_version  VARCHAR(4000), commit_comment  VARCHAR(4000), queued_by  VARCHAR(4000), triggered_by_id VARCHAR(4000), build_uri  VARCHAR(4000), job_status  VARCHAR(4000), agent_os  VARCHAR(4000));" 
+      displayName: snowsql create table devops_pipeline_runs if not exists
+      env:
+        SNOWSQL_PWD: $(acctPwd)
+
+      # insert pipeline data
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -o variable_substitution=true -q "INSERT INTO util_db.public.devops_pipeline_runs SELECT SYSDATE(),NULL,'$(Build.DefinitionName)','$(Build.BuildNumber)','$(sfAccountName)','${{ parameters.environment }}','$(Build.Reason)','${{ parameters.environmentName }}','$(Build.SourceBranch)','$(Build.SourceVersion)', NULL as commit_comment,'$(Build.QueuedBy)','$(Build.RequestedForId)','$(Build.BuildUri)','$(Agent.JobStatus)','$(Agent.OS)' " 
+      displayName: snowsql inserting pipeline build variables
+      env:
+        SNOWSQL_PWD: $(acctPwd)
+
+    # db objects; schema-change controlled at the db level
+    - ${{ each folder in parameters.foldersToDeploy }}: 
+            - template: steps-folder-deployment.yaml
+              parameters:
+                account: ${{ parameters.account }}
+                region: $(region)
+                sfAccountName: $(sfAccountName)
+                folder: ${{ folder }}
+                sfUsername: $(sfUsername) 
+                acctPwd: $(acctPwd)
+                sfRole: $(sfRole)
+                sfWarehouse: $(sfWarehouse)
+                dbName: '${{ parameters.dbName }}'
+                environment: ${{ parameters.environment }}
+                azureRegionIdentifier: $(azureRegionIdentifier)
+                stagingStorageAccountName: ${{ parameters.stagingStorageAccountName }}
+                deploymentType: ${{ parameters.deploymentType }}
+
+    #update pipeline data
+    - script: |
+        cd ~/bin 
+        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -q "UPDATE util_db.public.devops_pipeline_runs SET pipeline_run_end = SYSDATE() WHERE pipeline_name = '$(Build.DefinitionName)' AND build_number = '$(Build.BuildNumber)' AND pipeline_run_end is NULL" 
+      displayName: snowsql update pipeline run end
+      env:
+        SNOWSQL_PWD: $(acctPwd)
+
+    - template: generic/steps-post-deployment.yaml
+      parameters:
+          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+          keyVaultName: ${{ parameters.keyVaultName }} 

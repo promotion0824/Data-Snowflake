@@ -1,0 +1,40 @@
+variables:
+
+- name: accountName
+  value: 'uha86056'
+
+- name: region
+  value: 'east-us-2.azure'
+
+- name: customerName
+  value: dur
+
+- name: accountType
+  value: 'customer'
+
+- name: sfUsername
+  value: deployment_pipeline_usr
+
+- name: acctPwd
+  value: $(sf-dureu22-deploymentpipelineusr-password)
+
+- name: sfWarehouse
+  value: deployment_pipeline_wh
+
+- name: sfRole
+  value: deployment_pipeline
+
+- name: snowsqlSecretsFilter
+  value: 'sf-dureu22-deploymentpipelineusr-password'
+
+- name: controlDb
+  value: 'util_db'
+
+- name: azureRegionIdentifier
+  value: 'eu22'  
+
+- name: azureRegion
+  value: 'eastus2'
+
+- name: stagingStorageAccountName
+  value: '{"ppe": "ResourceNameForPPE", "prd": "stoprdeus206durde7e59fd"}'

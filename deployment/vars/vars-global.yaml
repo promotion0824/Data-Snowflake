@@ -1,0 +1,3 @@
+variables:
+  pythonVersion: "3.8"
+  PROJECT_FOLDER: $(System.DefaultWorkingDirectory)

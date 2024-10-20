@@ -1,0 +1,91 @@
+parameters:
+- name: environments
+  type: object
+
+- name: accountNames
+  type: object
+
+- name: foldersToDeploy
+  type: object
+
+- name: mainAccountLocatorRegion
+  type: string
+  
+- name: keyVaultSubscriptionName
+  type: string
+ 
+- name: keyVaultName
+  type: string
+
+variables: 
+  - name: validRegionIdentifiers
+    value: 'eu22|aue1|weu' 
+
+  - name: validRegionIdentifiers
+    value: 'eu22|aue1|weu' 
+
+  - name: defaultDeploymentUserName
+    value: deployment_pipeline_usr
+
+  - name: defaultDeploymentPipelineWarehouse
+    value: deployment_pipeline_wh
+
+  - name: defaultDeploymentPipelineRole
+    value: deployment_pipeline
+
+  - name: mainAccountUserName
+    value: DATAENGINEERINGSERVICE
+
+  - name: mainAccountUserPasswordSecretName
+    value: DATAENGINEERINGSERVICE
+
+  - name: mainAccountPasswordKvSecret
+    value: $(DATAENGINEERINGSERVICE)
+
+  - name: mainAccountWarehouseName
+    value: COMPUTE_WH  
+  
+  - name: schemachangeControlDb
+    value: 'util_db'  
+
+  - name: accountLocatorRegion
+
+  - name: accountIdentifier
+
+  - name: customerAbbrv
+
+stages:
+- ${{ each environment in parameters.environments }}:
+    - stage: ${{ environment }}_snowflake_db_deploy
+      jobs:
+
+      - ${{ each accountName in parameters.accountNames }}:
+        - deployment: Deploy_${{ accountName }}_${{ environment }}
+          displayName: Deploy ${{ accountName }} (${{ environment }}) 
+          variables: 
+            - name: environmentName
+              value: ${{ format('sf-{0}-db-{1}', lower(accountName), lower(environment)) }} 
+
+            - name: sfUserPasswordSecretName
+              value: 'sf-${{ lower(accountName) }}-deploymentpipelineusr-password'
+
+            - name: sfUserPasswordKvSecret
+              value: $(${{ variables.sfUserPasswordSecretName }})
+          environment: ${{ variables.environmentName }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:   
+                  - template: steps-deployment.yaml
+                    parameters:
+                      accountName: ${{ accountName }}
+                      mainAccountLocatorRegion: ${{ parameters.mainAccountLocatorRegion }}
+                      environment: ${{ environment }}
+                      environmentName: $(environmentName)
+                      foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                      keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                      keyVaultName: ${{ parameters.keyVaultName }}
+                      sfUsername: $(defaultDeploymentUserName)
+                      sfRole: $(defaultDeploymentPipelineRole)
+                      sfWarehouse: $(defaultDeploymentPipelineWarehouse)
+                      schemachangeControlDb: $(schemachangeControlDb)

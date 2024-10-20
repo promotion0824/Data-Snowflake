@@ -1,0 +1,94 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  displayName: Environment to Deploy
+  type: object
+  default: ['uat','prd']
+
+- name: accounts
+  displayName: Accounts to Deploy
+  type: object
+  default: ['cr03187','bd87466','pn13441','yk93061', 'ee96414','lj53023','ur49221','kw66019','hf25304','qja53007','uha86056','ola43784','we66173','me85248','iv53830','pka94448','wka58658','fza54184']
+
+- name: foldersToDeploy
+  displayName: Folders to Deploy
+  type: object
+  default: ['schema_realestate/schema_level/versioned_scripts','schema_realestate/schema_level/views_raw','schema_realestate/schema_level/views_transformed','schema_realestate/schema_level/views_published','schema_realestate/schema_level/functions','schema_realestate/schema_level/stored_procedures','schema_realestate/schema_level/tasks','snow_pipes/pipes','snow_pipes/integration_tests','security_realestate/roles/access','security_realestate/roles/functional','security_realestate/roles/access-functional','security_realestate/users','security_realestate/users-roles','security_realestate/legacy']
+  
+- name: keyVaultSubscriptionName
+  displayName: Data Subscription Name
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  displayName: DSECore Key Vault Name
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+- name: dbToUse
+  displayName: Database to use
+  default: single-tenant
+  values:
+  - util_db
+  - environment_db
+
+- name: deploymentType
+  displayName: Type of Deployment
+  type: string
+  default: single-tenant
+  values:
+  - single-tenant
+  - multi-tenant
+
+variables:
+- template: ../vars/vars-global.yaml
+
+stages:
+- ${{ each environment in parameters.environment }}:
+    - stage: ${{ environment }}_snowflake_accounts_deploy
+      variables: 
+          environmentName: ${{ format('data-core-snowflake-{0}', lower(environment)) }}
+      jobs:
+
+      - ${{ each account in parameters.accounts }}:
+        - deployment: Deploy_${{ account }}_${{ environment }}
+          displayName: Deploy ${{ account }} (${{ environment }})
+          environment: ${{ variables.environmentName }} 
+          variables: 
+            - template: ../vars/vars-${{ account }}.yaml
+            - name: db
+              ${{ if eq(parameters.dbToUse, 'util_db') }}:
+                value: util_db
+              ${{ else }}:
+                value: ${{ format('{0}_db', environment) }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - bash: |
+                      STORAGE_ACCOUNT_JSON='$(stagingStorageAccountName)'
+                      ENVIRONMENT_NAME='${{ environment }}'
+                      STORAGE_ACCOUNT_NAME=$(echo $STORAGE_ACCOUNT_JSON | jq -r ".$ENVIRONMENT_NAME")
+                      echo "##vso[task.setvariable variable=stagingStorageAccountName]$STORAGE_ACCOUNT_NAME"
+                    displayName: Parse stagingStorageAccountName from JSON for environment ${{ environment }}       
+                  - template: ../steps-account-deployment.yaml
+                    parameters:
+                      environment: ${{ environment }}
+                      environmentName: ${{ variables.environmentName }} 
+                      account: ${{ account }}
+                      keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                      keyVaultName: ${{ parameters.keyVaultName }}
+                      foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                      dbName: ${{ variables.db }}
+                      stagingStorageAccountName: $(stagingStorageAccountName)
+                      deploymentType: ${{ parameters.deploymentType }}
+                      # dbName: ${{ parameters.schemachangeControlDb }}

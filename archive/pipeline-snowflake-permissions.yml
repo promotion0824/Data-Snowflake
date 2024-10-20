@@ -1,0 +1,63 @@
+trigger: none
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  type: object
+  default: ['dev','uat','prd']
+
+- name: accounts
+  type: object
+  #default: ['cr03187','bd87466','pn13441','cd46354','yk93061','ee96414','lj53023','kw66019','hf25304','ur49221','dx96049','nu32566','we66173']
+  default: ['ft12376']
+
+- name: foldersToDeploy
+  type: object
+  # default: ['security/roles','security/roles_grant']
+  default: ['security_realestate/roles/access', 'security_realestate/roles/functional', 'security_realestate/roles/access-functional', 'security_realestate/users', 'security_realestate/users-roles', 'security_realestate/legacy']
+  
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+- name: schemachangeControlDb
+  type: string
+  default: 'util_db'  
+
+variables:
+- template: ../vars/vars-global.yaml
+
+stages:
+- ${{ each environment in parameters.environment }}:
+    - stage: ${{ environment }}_snowflake_accounts_deploy
+      variables: 
+          environmentName: ${{ format('data-core-snowflake-{0}', lower(environment)) }}
+      jobs:
+
+      - ${{ each account in parameters.accounts }}:
+        - deployment: Deploy_${{ account }}_${{ environment }}
+          displayName: Deploy ${{ account }} (${{ environment }})
+          environment: ${{ variables.environmentName }} 
+          variables: 
+            - template: ../vars/vars-${{ account }}.yaml
+          strategy:
+            runOnce:
+              deploy:
+                steps:      
+                  - template: steps-account-deployment.yaml
+                    parameters:
+                      environment: ${{ environment }}
+                      environmentName: ${{ variables.environmentName }} 
+                      account: ${{ account }}
+                      keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                      keyVaultName: ${{ parameters.keyVaultName }}
+                      foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                      dbName: ${{ parameters.schemachangeControlDb }}

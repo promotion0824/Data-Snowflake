@@ -1,0 +1,355 @@
+trigger: none
+pr: none
+
+resources:
+  repositories:
+  - repository: Data-Snowflake
+    type: github
+    name: WillowInc/Data-Snowflake
+    endpoint: WillowInc
+    ref: $(Build.SourceBranchName)
+
+
+parameters:
+- name: dataLoader
+  displayName: Data Loader
+  type: object
+  default: 
+    adfName: adf-prdeus02sanin1datacore-dl-prd-19bf10cc
+    kvName: kvprdeus02sani6698f04c
+    rgName: rg-prd-eus-02-san-in1
+    storageAccountName: stoprdeus02sani0df24af9
+
+- name: environment
+  type: string
+  default: prd
+
+- name: accountName
+  type: string
+  default: SNFEU22
+
+- name: containers
+  type: object
+  default: ['snowflake-stage', 'snowflake-telemetry-stage','snowflake-adhoc-stage']
+
+- name: serviceConnectionName
+  type: string
+  default: az-prd-eus-02
+
+- name: azureSubscriptionName
+  type: string
+  default: prd-eus-02
+
+# - name: mainAccountLocatorRegion
+#   displayName: Main SF Account Locator and Azure Region
+#   type: string
+#   default: 'wo77920.australia-east.azure'
+
+- name: keyVaultSubscriptionName
+  displayName: Key Vault Subscription Name
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  displayName: Key Vault Name
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+variables: 
+- name: validRegionIdentifiers
+  value: 'eu22|aue1|weu'
+- name: deploymentType
+  value: 'single-tenant'
+- name: mainAccountLocatorRegion
+  value: 'wo77920.australia-east.azure' 
+
+jobs:
+  - deployment: Deploy_${{ parameters.accountName }}_${{ parameters.environment }}
+    displayName: Deploy stages for ${{ parameters.accountName }} (${{ parameters.environment }})
+    environment: ${{ format('data-core-snowflake-stage-{0}', lower(parameters.environment)) }}
+    variables:   
+
+      - name: mainAccountUserName
+        value: DATAENGINEERINGSERVICE
+
+      - name: mainAccountUserPasswordSecretName
+        value: DATAENGINEERINGSERVICE
+
+      - name: mainAccountPasswordKvSecret
+        value: $(DATAENGINEERINGSERVICE)
+
+      - name: mainAccountWarehouseName
+        value: COMPUTE_WH  
+      
+      - name: schemachangeControlDb
+        value: 'util_db'  
+
+      - name: deploymentPipelineUserPasswordSecretName
+        value: 'sf-${{ lower(parameters.accountName) }}-deploymentpipelineusr-password'  
+
+      - name: deploymentPipelineUserPasswordKvSecret
+        value: $(${{ variables.deploymentPipelineUserPasswordSecretName }})
+
+      - name: defaultDeploymentUserName
+        value: deployment_pipeline_usr
+
+      - name: defaultDeploymentPipelineWarehouse
+        value: deployment_pipeline_wh
+
+      - name: defaultDeploymentPipelineRole
+        value: deployment_pipeline
+
+      - name: dataEngineeringServicePasswordSecretName
+        value: 'sf-${{ lower(parameters.accountName) }}-dataengineeringservice-password'  
+
+      - name: dataEngineeringServicePasswordPasswordKvSecret
+        value: $(${{ variables.dataEngineeringServicePasswordSecretName }})    
+
+      - name: dataEngineeringServiceUserName
+        value: DATAENGINEERINGSERVICE     
+
+      - name: agentIpAddress
+      - name: storageIntClientId
+      - name: notificationIntClientId
+      - name: storageIntConsentUrl
+      - name: notificationIntConsentUrl
+      - name: sfSubnetIds
+      - name: customerAbbrv
+      - name: accountLocatorRegion
+      - name: accountLocatorRegion
+      - name: azureRegion
+      - name: azureSubscriptionId
+      - name: accountIdentifier
+      - name: aadTenantId 
+      - name: storageAccountKey       
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+              - checkout: Data-Snowflake
+
+              - task: AzureCLI@2
+                displayName: Resolve variables
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }} 
+                  addSpnToEnvironment: true
+                  scriptType: 'pscore'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    # Get Azure Tenant ID
+                    echo "##vso[task.setvariable variable=aadTenantId;]$env:tenantId"
+
+                    # Get customer abbreviation from account name by removing the region identifier
+                    $accountName = '${{ parameters.accountName }}'
+                    $customerAbbrv = ($accountName -replace('$(validRegionIdentifiers)', '')).ToLower()
+                    echo "##vso[task.setvariable variable=customerAbbrv]$customerAbbrv"
+
+                    # Set storage account key secret name
+                    $storageAccountKeySecretName = -join('${{ parameters.dataLoader.storageAccountName }}', '-access-key1');
+                    echo "##vso[task.setvariable variable=storageAccountKeySecretName]$storageAccountKeySecretName"
+
+              - script: 
+                  |
+                  sudo touch ~/.profile
+                  curl -O https://sfc-repo.azure.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowflake-snowsql-1.2.20-1.x86_64.rpm
+                  curl -O https://sfc-repo.azure.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.20-linux_x86_64.bash
+                  SNOWSQL_DEST=~/bin SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.20-linux_x86_64.bash
+                displayName: Install SnowSQL
+
+              - task: AzureCLI@2
+                displayName: Get agent IP address
+                inputs:
+                  azureSubscription: ${{ parameters.keyVaultSubscriptionName }}
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    ip=$(curl -s "http://ipinfo.io/json" | jq '.ip')
+                    echo "Agent IP address: ${ip}"
+                    echo "##vso[task.setvariable variable=agentIpAddress]$ip"
+
+              - task: AzureCLI@2
+                displayName: Create key vault firewall rule for the agent (${{ parameters.keyVaultName }})
+                inputs:
+                  azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    echo 'Agent IP Address: $(agentIpAddress) '
+                    az keyvault network-rule add  --name ${{ parameters.keyVaultName }} --ip-address $(agentIpAddress) 
+
+              - task: AzureCLI@2
+                displayName: Sleep for 30 seconds
+                inputs:
+                  azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: sleep 30
+
+              - task: AzureKeyVault@1
+                displayName: Download key vault secrets
+                inputs:
+                  azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+                  KeyVaultName: '${{ parameters.keyVaultName }}'
+                  SecretsFilter: '$(mainAccountUserPasswordSecretName), $(deploymentPipelineUserPasswordSecretName), $(dataEngineeringServicePasswordSecretName)'
+                  RunAsPreJob: false 
+
+              - script: |
+                  cd ~/bin 
+                  ACCOUNT_LOCATOR=$(./snowsql -a $(mainAccountLocatorRegion) -u $(mainAccountUserName) -w $(mainAccountWarehouseName) -r 'ORGADMIN' -q "CALL util_db.utils.get_account_locator('${{ parameters.accountName }}');"  -o friendly=False -o header=False -o output_format=plain -o timing=False -o exit_on_error=true)
+                  echo $ACCOUNT_LOCATOR
+                  echo "##vso[task.setvariable variable=accountLocatorRegion;]$ACCOUNT_LOCATOR"  
+                displayName: Try get account locator
+                env:
+                  SNOWSQL_PWD: $(mainAccountPasswordKvSecret)     
+
+              - task: Bash@3
+                condition: eq(variables.accountLocatorRegion, 'NULL')
+                displayName: Test Snowflake account found
+                inputs:
+                  targetType: 'inline'
+                  script: |
+                    echo 'Failed to find Snowflake account'
+                    exit 1
+
+              - powershell: |
+                  # Get Azure Region from $accountLocatorRegion
+                  $accountLocatorRegion = '$(accountLocatorRegion)'
+                  $accountLocatorRegionParts = $accountLocatorRegion.split('.')
+                  $accountIdentifier = $accountLocatorRegionParts[0].replace('-', '')
+                  echo "##vso[task.setvariable variable=accountIdentifier;]$accountIdentifier"  
+                  $azureRegion = $accountLocatorRegionParts[1].replace('-', '')
+                  echo "##vso[task.setvariable variable=azureRegion;]$azureRegion"  
+                displayName: Set Account Identifier and Azure Region
+
+              # -----------------------------------------------------------------------------------------
+              ## This is done  by the Pulumi pipeline now
+              # -----------------------------------------------------------------------------------------
+
+              - task: AzureCLI@2
+                displayName: Set Azure Region and Subscription Id variables
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }}
+                  addSpnToEnvironment: true
+                  scriptType: 'pscore'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    # Get Azure Region from $accountLocatorRegion
+                    $accountLocatorRegion = '$(accountLocatorRegion)'
+                    $azureRegion = $accountLocatorRegion.split('.')[1].replace('-', '')
+                    echo "##vso[task.setvariable variable=azureRegion;]$azureRegion"
+
+                    # Set azureSubscriptionId
+                    az account set --subscription ${{ parameters.azureSubscriptionName }}
+                    $azureSubscriptionId = (az account show --query id --output tsv)
+                    echo "Sub id: '$(azureSubscriptionId)'"
+                    echo "##vso[task.setvariable variable=azureSubscriptionId]$azureSubscriptionId"
+
+              - bash: |
+                  cd ~/bin 
+
+                  echo "Setup storage integration"
+                  ./snowsql -a $(accountLocatorRegion) -u $(defaultDeploymentUserName) -w $(defaultDeploymentPipelineWarehouse) -r $(defaultDeploymentPipelineRole) -f $(Build.Repository.LocalPath)/integrations/Single_Tenant/storage_integration_setup_single_tenant.sql -D azure_tenant_id=$(aadTenantId) -D storage_account_name=${{ parameters.dataLoader.storageAccountName }} -D environment=${{ parameters.environment }} -o exit_on_error=true
+
+                  echo "Setup notification integrations"
+                  ./snowsql -a $(accountLocatorRegion) -u $(defaultDeploymentUserName) -w $(defaultDeploymentPipelineWarehouse) -r $(defaultDeploymentPipelineRole) -f $(Build.Repository.LocalPath)/integrations/Single_Tenant/notification_integration_setup_single_tenant.sql -D azure_tenant_id=$(aadTenantId) -D storage_account_name=${{ parameters.dataLoader.storageAccountName }} -D environment=${{ parameters.environment }} -o exit_on_error=true
+
+
+                displayName: Setup Snowflake integrations
+                env:
+                  SNOWSQL_PWD: $(deploymentPipelineUserPasswordKvSecret)
+
+              - bash: |
+                  # This step can be done with any of the stages - storageIntClientId and notificationIntClientId will be the same
+                  cd ~/bin 
+
+                  sin_output=$(./snowsql -a $(accountLocatorRegion) -u $(defaultDeploymentUserName) -w $(defaultDeploymentPipelineWarehouse) -r $(defaultDeploymentPipelineRole) -o output_format=plain  -o friendly=false -o header=false -o timing=false -q "DESC INTEGRATION EXT_ALL_STAGES_${{ upper(parameters.environment) }}_SIN;" -o exit_on_error=true)
+                  sin_client_id=$(echo $sin_output | grep -o -P '(?<=client_id=)\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b(?=&response_type)')
+                  sin_consent_url=$(echo $sin_output | grep -Eo "https://login.microsoftonline.com\S+?\&response_type=code")
+                  echo "##vso[task.setvariable variable=storageIntClientId;]$sin_client_id"
+                  echo "##vso[task.setvariable variable=storageIntConsentUrl;]$sin_consent_url"
+
+                  nin_output=$(./snowsql -a $(accountLocatorRegion) -u $(defaultDeploymentUserName) -w $(defaultDeploymentPipelineWarehouse) -r $(defaultDeploymentPipelineRole) -o output_format=plain -o friendly=false -o header=false -o timing=false -q "DESC INTEGRATION EXT_STAGE_${{ upper(parameters.environment) }}_NIN;" -o exit_on_error=true)
+                  nin_client_id=$(echo $nin_output | grep -o -P '(?<=client_id=)\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b(?=&response_type)')
+                  nin_consent_url=$(echo $nin_output | grep -Eo "https://login.microsoftonline.com\S+?\&response_type=code")
+                  echo "##vso[task.setvariable variable=notificationIntClientId;]$nin_client_id"
+                  echo "##vso[task.setvariable variable=notificationIntConsentUrl;]$nin_consent_url"
+
+                name: GetIntegrationsDetails
+                displayName: Get client_ids and admin consent URLs for Snowflake integrations 
+                workingDirectory: $(System.DefaultWorkingDirectory)
+                env:
+                  SNOWSQL_PWD: $(deploymentPipelineUserPasswordKvSecret)        
+
+              - task: AzureCLI@2
+                displayName: 'Check service principals for Snowflake integrations exist'
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }}
+                  scriptType: pscore
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    $err = $false
+                    $output_si = az ad sp show --id $(storageIntClientId)
+                    
+                    if (!$output_si) {
+                        echo "##[section]Service principal '$(storageIntClientId)' for Snowflake storage integration does not exist."
+                        echo "##[section]Please use the following URL to trigger a request to create the service principal:"
+                        echo '##[section]$(storageIntConsentUrl)'
+                        $err = $true
+                    }
+
+                    $output_ni = az ad sp show --id $(notificationIntClientId)
+
+                    if (!$output_ni) {
+                        echo "##[section]Service principal '$(notificationIntClientId)' for Snowflake notification integration does not exist."
+                        echo "##[section]Please use the following URL to trigger a request to create the service principal:"
+                        echo '##[section]$(notificationIntConsentUrl)'
+                        $err = $true
+                    }                    
+
+                    if ($err) {
+                        echo "##[error]Service principal for Snowflake storage and/or notification integration does not exist. See above."
+                        exit 1
+                    }  
+
+              - task: AzureCLI@2
+                displayName: 'Grant permissions to Snowflake service principals'
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }}
+                  scriptType: pscore
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    $scope = "/subscriptions/$(azureSubscriptionId)/resourceGroups/${{ parameters.dataLoader.rgName}}/providers/Microsoft.Storage/storageAccounts/${{ parameters.dataLoader.storageAccountName }}"
+
+                    echo $scope
+                    az role assignment create --role "Storage Blob Data Contributor" --assignee $(storageIntClientId) --scope $scope
+                    az role assignment create --role "Storage Queue Data Contributor" --assignee $(notificationIntClientId) --scope $scope
+
+              - task: AzureCLI@2
+                displayName: Get storage account key
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }}
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    key=$(az storage account keys list -g ${{ parameters.dataLoader.rgName}} -n ${{ parameters.dataLoader.storageAccountName }} --subscription $(azureSubscriptionId) --query [0].value -o tsv)
+                    echo "##vso[task.setvariable variable=storageAccountKey;issecret=true]$key"  
+
+              - task: AzureCLI@2
+                displayName: 'Add secret to key vault'
+                inputs:
+                  azureSubscription: ${{ parameters.serviceConnectionName }}
+                  scriptType: pscore
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    az keyvault secret set --vault-name ${{ parameters.dataLoader.kvName }} --name '$(storageAccountKeySecretName)'--value $(storageAccountKey) --expires "2099-12-31T00:00:00Z"
+
+              - task: AzureCLI@2
+                displayName: 'Remove temp key vault firewall rule (${{ parameters.keyVaultName }})'
+                condition: always()
+                inputs:
+                  azureSubscription: ${{ parameters.keyVaultSubscriptionName }}
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    az keyvault network-rule remove --name ${{ parameters.keyVaultName }} --ip-address "$(agentIpAddress)/32"

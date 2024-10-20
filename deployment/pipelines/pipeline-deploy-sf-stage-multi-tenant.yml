@@ -1,0 +1,102 @@
+trigger: none
+pr: none
+
+resources:
+  repositories:
+  - repository: Data-Snowflake
+    type: github
+    name: WillowInc/Data-Snowflake
+    endpoint: WillowInc
+    ref: $(Build.SourceBranchName)
+
+parameters:
+- name: workloadName 
+  displayName: Workload Name
+  default: dsecore
+
+- name: customerAbbrv
+  displayName: Customer Abbreviation
+  type: string
+
+- name: azureRegionAbbrv
+  displayName: Azure Region Abbreviation
+  type: string
+  default: eu22
+  values: 
+  - aue1
+  - eu22
+  - weu
+
+- name: environment
+  displayName: Environment Definition
+  type: object
+  default: 
+  - name: dev
+    serviceConnectionName: az-data-dev-Data
+    azureSubscriptionName: Data-DEV
+    dataContributorAadGroupName: Azure-Data-DEV-Contributor  
+
+- name: containers
+  displayName: Stage Containers
+  type: object
+  default: ['stage','telemetry-stage','adhoc-stage']
+
+- name: resourceTags
+  displayName: Resource Tags
+  type: string
+  default: '{"team": "Data", "managedby": "arm", "project": "data", "app": "dataloader", "customer": "none"}'
+
+- name: storageAccountResourceGroupLocation
+  displayName: Storage Account Resource Group Location
+  type: string
+  default: eastus2
+
+- name: keyVaultSubscriptionName
+  displayName: Key Vault Subscription Name
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  displayName: Key Vault Name
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+variables: 
+- name: mainAccountLocatorRegion
+  value: 'wo77920.australia-east.azure' 
+
+
+stages:
+- stage: Build
+  jobs:
+    - job: Build
+      steps:
+        - checkout: Data-Snowflake
+
+        # Publish the artifact to be used as a source for a release pipeline.
+        - task: PublishPipelineArtifact@1
+          inputs:
+            targetPath: '$(Build.Repository.LocalPath)/integrations' 
+            artifact: 'integrations'
+            publishLocation: 'pipeline'
+          displayName: 'Publish the artifact'          
+
+- ${{ each environment in parameters.environment }}:
+    - stage: Deploy_${{ environment.name }}
+      displayName: Deploy ${{ upper(environment.name) }}
+      jobs:
+      - template: ../job-deploy-sf-stage-multi-tenant.yml
+        parameters:
+          workloadName: ${{ lower(parameters.workloadName) }} 
+          environment: ${{ lower(environment.name) }}
+          customerAbbrv: ${{ lower(parameters.customerAbbrv) }}
+          azureRegionAbbrv: ${{ lower(parameters.azureRegionAbbrv) }}
+          containers: ${{ parameters.containers }} 
+          resourceTags: ${{ parameters.resourceTags }} 
+          storageAccountResourceGroupLocation: ${{ parameters.storageAccountResourceGroupLocation }} 
+          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+          keyVaultName: ${{ parameters.keyVaultName }}         
+          mainAccountLocatorRegion: $(mainAccountLocatorRegion)
+          serviceConnectionName: ${{ environment.serviceConnectionName }}   
+          azureSubscriptionName: ${{ environment.azureSubscriptionName }}   
+

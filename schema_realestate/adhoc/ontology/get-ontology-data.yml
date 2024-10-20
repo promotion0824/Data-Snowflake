@@ -1,0 +1,172 @@
+schedules:
+# Daily at 03:05 
+- cron: "05 03 * * *"
+  displayName: Daily run; 03:05 UTC
+  always: true
+  branches:
+    include:
+    - main
+trigger: none
+pr: none
+
+parameters:
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'wil-dsecore-prd-kv-eu22'
+
+# using the same name here since I no longer have access to this vault.
+- name: ontologyStorageAccount
+  type: string
+  default: 'wilsfstgwilaueprddlsaue1'
+
+# no spaces in string
+- name: repoList
+  type: string
+  default: 'opendigitaltwins-building,opendigitaltwins-airport'
+  
+- name: repoPath
+  type: string
+  default: 'https://github.com/WillowInc/'
+
+steps:
+- checkout: none
+
+- task: AzureCLI@2
+  displayName: Get agent IP address
+  inputs:
+    azureSubscription: ${{ parameters.keyVaultSubscriptionName }}
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      ip=$(curl -s "http://ipinfo.io/json" | jq '.ip')
+      echo "Agent IP address: ${ip}"
+      echo "##vso[task.setvariable variable=agentIpAddress]$ip"
+
+- task: AzureCLI@2
+  displayName: Create key vault firewall rule for the agent
+  inputs:
+    azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      echo 'Agent IP Address: $(agentIpAddress) '
+      az keyvault network-rule add  --name ${{ parameters.keyVaultName }} --ip-address $(agentIpAddress) 
+      az storage account network-rule add --account-name ${{ parameters.ontologyStorageAccount }} --ip-address $(agentIpAddress)
+
+- task: AzureCLI@2
+  displayName: Sleep for 45 seconds
+  inputs:
+    azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: sleep 45
+
+- task: AzureKeyVault@1
+  displayName: Download key vault secrets
+  inputs:
+    azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+    KeyVaultName: '${{ parameters.keyVaultName }}'
+    SecretsFilter: 'DegreeDays-StorageAccount-SasToken'
+    RunAsPreJob: false   
+
+- task: Bash@3
+  displayName: 'Installing libraries'
+  inputs:
+    targetType: 'inline'
+    script: |
+      pip install GitPython
+      pip install typing-extensions
+      pip install azure.identity
+      pip install azure.keyvault.secrets
+      pip install azure.storage.blob
+- task: PythonScript@0
+  displayName: Getting Ontology data from repo
+  inputs:
+    arguments: ${{ parameters.repoList }}
+    scriptSource: 'inline'
+    script: |
+      import sys
+      import os
+      from git import Repo
+      repoString = sys.argv[1]
+      repoList = repoString.split(',')
+      localPath = '/home/vsts/work/Ontology'
+      for repo in repoList:
+        localPath = '/home/vsts/work/Ontology/' + repo
+        os.makedirs(localPath, exist_ok=True) 
+        Repo.clone_from('${{ parameters.repoPath }}' + repo, localPath)
+        print("Ontology folders: '", localPath, "'") 
+
+- task: PythonScript@0
+  displayName: Transforming Ontology
+  retryCountOnTaskFailure: 1
+  inputs:
+    arguments: $(DegreeDays-StorageAccount-SasToken) ${{ parameters.ontologyStorageAccount }} $(Build.SourcesDirectory) ${{ parameters.repoList }}
+    scriptSource: 'inline'
+    script: |
+      from git import Repo
+      import os
+      import json
+      import csv
+      import codecs
+      from typing_extensions import Concatenate 
+      import sys
+      from io import StringIO 
+      import gzip
+      import time
+      from azure.identity import DefaultAzureCredential
+      from azure.keyvault.secrets import SecretClient
+      from azure.storage.blob import *
+
+      sas_token = sys.argv[1]
+      storage_account = sys.argv[2]
+      local_path = sys.argv[3]
+      repoString = sys.argv[4]
+      repoList = repoString.split(',')
+      for repo in repoList:
+        repoName = repo
+        accountEndpoint = "https://" + (storage_account) + ".blob.core.windows.net"
+        sasToken = sas_token
+        containerName = 'wilaue-wo77920-adhoc-stage'
+        ontology_blob = 'ontology/' + repoName + '.csv'
+        print(repoName)
+        directory = '/home/vsts/work/Ontology/' + repoName + '/Ontology/Willow/'
+        header = ['path', 'key_value']
+        data_list = []
+        output_file = '/home/vsts/work/Ontology/' + repoName + '/' + repoName + '.csv'
+        with open(output_file, 'w', newline='') as outfile:
+          writer = csv.writer(outfile)
+          writer.writerow(header)
+        for root, subdirectories, files in os.walk(directory):
+            for subdirectory in subdirectories:
+                foldername = os.path.join(root, subdirectory)
+            for file in files:
+              filename = os.path.join(root, file)
+              print(filename)
+              if filename.endswith(".json"):
+
+                    with open(filename, 'r',encoding='utf-8-sig') as f:
+                        with open(output_file, 'a', newline='') as outfile:
+                            try:       
+                                loaded_json = json.load(f)
+                                filepath = filename.replace(directory,'Willow')
+                                paths = filepath.split('\\')
+                                data =(paths, loaded_json)
+                                writer = csv.writer(outfile)
+                                writer.writerow(data)
+                            except:
+                              print(filename + ' parsing failed')
+        outfile.close()
+        blob_service_client = BlobServiceClient(account_url=accountEndpoint, credential=sasToken)
+        blob_client = blob_service_client.get_blob_client(container=containerName, blob=ontology_blob)
+        with open(output_file, "rb") as data:
+            try:
+                blob_client.upload_blob(data, blob_type="BlockBlob",overwrite=True)
+            except Exception as err:
+                print(output_file + ' upload failed')
+                print(f"Unexpected {err=}, {type(err)=}")
+                raise

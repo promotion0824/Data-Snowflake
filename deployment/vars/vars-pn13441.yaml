@@ -1,0 +1,37 @@
+variables:
+
+- name: accountName
+  value: 'pn13441'
+  
+- name: region
+  value: 'east-us-2.azure'
+  
+- name: customerName
+  value: brf
+
+- name: accountType
+  value: 'customer'
+  
+- name: sfUsername
+  value: deployment_pipeline_usr
+  
+- name: acctPwd
+  value: $(sf-brfeu22-deploymentpipelineusr-password)
+  
+- name: sfWarehouse
+  value: deployment_pipeline_wh
+
+- name: sfRole
+  value: deployment_pipeline
+  
+- name: snowsqlSecretsFilter
+  value: 'sf-brfeu22-deploymentpipelineusr-password'
+
+- name: controlDb
+  value: 'util_db'
+
+- name: azureRegionIdentifier
+  value: 'eu22'  
+
+- name: azureRegion
+  value: 'eastus2'

@@ -1,0 +1,83 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - /account-level
+      - /deployment/vars
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  type: object
+  default: ['dev']
+
+- name: accounts
+  type: object
+  default: ['cr03187','bd87466','pn13441','cd46354','yk93061','ee96414','lj53023','kw66019','hf25304','ur49221','dx96049','nu32566','we66173']
+
+- name: foldersToDeploy
+  type: object
+  default: ['account_level/run_first', 'account_level/scripts', 'account_level/run_last', 'account_level/integration_tests']
+  
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+- name: schemachangeControlDb
+  type: string
+  default: 'util_db'  
+
+- name: deploymentType
+  displayName: Type of Deployment
+  type: string
+  default: single-tenant
+  values:
+  - single-tenant
+  - multi-tenant
+
+variables:
+- template: vars/vars-global.yaml
+
+stages:
+- ${{ each environment in parameters.environment }}:
+    - stage: ${{ environment }}_snowflake_accounts_deploy
+      variables: 
+        environmentName: ${{ format('data-core-snowflake-{0}', lower(environment)) }}
+      jobs:
+        - ${{ each account in parameters.accounts }}:
+          - deployment: Deploy_${{ account }}_${{ environment }}
+            displayName: Deploy ${{ account }} (${{ environment }})
+            environment: ${{ variables.environmentName }} 
+            variables: 
+              - template: vars/vars-${{ account }}.yaml
+            strategy:
+              runOnce:
+                deploy:
+                  steps: 
+                    - bash: |
+                        STORAGE_ACCOUNT_JSON='$(stagingStorageAccountName)'
+                        ENVIRONMENT_NAME='${{ environment }}'
+                        STORAGE_ACCOUNT_NAME=$(echo $STORAGE_ACCOUNT_JSON | jq -r ".$ENVIRONMENT_NAME")
+                        echo "##vso[task.setvariable variable=stagingStorageAccountName]$STORAGE_ACCOUNT_NAME"
+                      displayName: Parse stagingStorageAccountName from JSON for environment ${{ environment }}     
+                    - template: steps-account-deployment.yaml
+                      parameters:
+                        environment: ${{ environment }}
+                        environmentName: ${{ variables.environmentName }} 
+                        account: ${{ account }}
+                        keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                        keyVaultName: ${{ parameters.keyVaultName }}
+                        foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                        dbName: ${{ parameters.schemachangeControlDb }}
+                        stagingStorageAccountName: $(stagingStorageAccountName)
+                        deploymentType: ${{ parameters.deploymentType }}

@@ -1,0 +1,61 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  type: object
+  default: ['dev']
+
+- name: accounts
+  type: object
+  default: ['ee96414']
+
+- name: foldersToDeploy
+  type: object
+  default: ['snow_pipes/pipes','snow_pipes/integration_tests']
+  
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+variables:
+- template: vars/vars-global.yaml
+
+stages:
+- ${{ each environment in parameters.environment }}:
+    - stage: ${{ environment }}_snowflake_accounts_deploy
+      jobs:
+
+      - ${{ each account in parameters.accounts }}:
+        - deployment: Deploy_${{ account }}_${{ environment }}
+          displayName: Deploy ${{ account }} (${{ environment }})
+          environment: ${{ format('data-core-snowflake-{0}', lower(environment)) }}
+          variables: 
+            - template: vars/vars-${{ account }}.yaml
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - bash: |
+                      STORAGE_ACCOUNT_JSON='$(stagingStorageAccountName)'
+                      ENVIRONMENT_NAME='${{ environment }}'
+                      STORAGE_ACCOUNT_NAME=$(echo $STORAGE_ACCOUNT_JSON | jq -r ".$ENVIRONMENT_NAME")
+                      echo "##vso[task.setvariable variable=stagingStorageAccountName]$STORAGE_ACCOUNT_NAME"
+                    displayName: Parse stagingStorageAccountName from JSON for environment ${{ environment }}      
+                  - template: steps-account-deployment.yaml
+                    parameters:
+                      environment: ${{ environment }}
+                      environmentName: ${{ parameters.environmentName }}
+                      account: ${{ account }}
+                      keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }}
+                      keyVaultName: ${{ parameters.keyVaultName }}
+                      foldersToDeploy: ${{ parameters.foldersToDeploy }}
+                      dbName: ${{ environment }}_db
+                      stagingStorageAccountName: $(stagingStorageAccountName)

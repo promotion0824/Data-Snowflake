@@ -1,0 +1,309 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: customerAbbrv
+  displayName: Customer abbreviation (for example brf or inv)
+  default: acme
+  type: string
+
+- name: createNewAccount
+  displayName: Create new account
+  type: boolean
+  default: false
+
+- name: azureRegionId
+  displayName: Azure region
+  type: string
+  default: azure_eastus2
+  values:
+  - azure_australiaeast
+  - azure_eastus2
+  - azure_westeurope
+
+# - name: deploymentType
+#   displayName: Type of Deployment
+#   type: string
+#   default: single-tenant
+#   values:
+#   - single-tenant
+#   - multi-tenant
+
+- name: edition
+  displayName: Snowflake edition
+  type: string
+  default: 'ENTERPRISE'
+  values:
+  - STANDARD
+  - ENTERPRISE
+  - BUSINESS_CRITICAL
+
+# Feature flags
+- name: isCustomerAccount
+  displayName: Is customer account
+  type: boolean
+  default: true
+
+- name: stagingStorageAccount
+  displayName: Staging storage account name
+  type: string
+  default: 'wilsfstgwilaueprddlsaue1'
+
+- name: createIntegrations
+  displayName: Create integrations
+  type: boolean
+  default: false
+
+- name: hasAnalyticsDb
+  displayName: Deploy Analytics DB
+  type: boolean
+  default: true
+
+- name: hasDsSandboxDb
+  displayName: Deploy Data Science Sandbox DB
+  type: boolean
+  default: false
+
+- name: hasMonitoringDb
+  displayName: Deploy Monitoring DB
+  type: boolean
+  default: true
+
+- name: hasSustainabilityDb
+  displayName: Deploy Sustainability DB
+  type: boolean
+  default: false
+
+- name: foldersToDeploy
+  displayName: Folders to deploy
+  type: object
+  default: ['databases', 'warehouses', 'security_core/roles/access', 'security_core/roles/functional', 'security_core/roles/access', 'security_core/roles/access-functional', 'security_core/users', 'security_core/users-roles', 'security_core/legacy']
+
+- name: environments
+  displayName: Environment (only for environment specific account objects)
+  type: object
+  default: ['dev', 'uat', 'prd']
+
+- name: envFoldersToDeploy
+  displayName: Environment folders to deploy
+  type: object
+  default: ['integrations','warehouses']
+  
+- name: keyVaultSubscriptionName
+  displayName: Key Vault subscription name
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  displayName: Key Vault name
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+variables:
+- name: accountAdminPassword
+
+- name: deploymentUserPassword 
+
+- name: azTenantId 
+  value: d43166d1-c2a1-4f26-a213-f620dba13ab8
+
+- name: accountAdminUserName
+  value: DATAENGINEERINGSERVICE
+
+- name: accountAdminEmail
+  value: DataEngineering@willowinc.com
+
+- name: mainAccountUserName
+  value: DATAENGINEERINGSERVICE
+
+- name: mainAccountUserPasswordSecretName
+  value: DATAENGINEERINGSERVICE
+
+- name: mainAccountPasswordKvSecret
+  value: $(DATAENGINEERINGSERVICE)
+
+- name: mainAccountWarehouseName
+  value: COMPUTE_WH
+
+- name: mainAccountLocatorRegion
+  value: 'wo77920.australia-east.azure'
+
+- name: azureRegionCode
+  ${{ if eq(parameters.azureRegionId, 'azure_australiaeast') }}:
+    value: 'aue1'
+  ${{ if eq(parameters.azureRegionId, 'azure_eastus2') }}:
+    value: 'eu22'
+  ${{ if eq(parameters.azureRegionId, 'azure_westeurope') }}:
+    value: 'weu'
+
+- name: accountName
+  value:  ${{ format('{0}{1}', lower(parameters.customerAbbrv), variables.azureRegionCode) }} 
+
+- name: dataEngineeringServicePasswordSecretName
+  value: 'sf-${{ variables.accountName }}-dataengineeringservice-password'
+
+- name: dataEngineeringServicePasswordKvSecret
+  value: $(${{ variables.dataEngineeringServicePasswordSecretName }})
+
+- name: deploymentPipelineUserPasswordSecretName
+  value: 'sf-${{ variables.accountName }}-deploymentpipelineusr-password'  
+
+stages:
+- stage: Setup_account_${{ variables.accountName }}
+  jobs:
+  - deployment: Setup_account_${{ variables.accountName }}
+    displayName: Setup account ${{ variables.accountName }}
+    environment: data-core-snowflake-account
+    variables: 
+      - name: accountLocatorRegion
+      - name: accountLocator
+    strategy:
+      runOnce:
+        deploy:
+          steps: 
+            - template: ../steps-pre-deployment-core.yaml
+              parameters:
+                  keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+                  keyVaultName: ${{ parameters.keyVaultName }} 
+                  dataEngineeringServicePasswordSecretName: '$(mainAccountUserPasswordSecretName)'   
+
+            - task: CopyFiles@2
+              displayName: 'Copy scripts to ArtifactStagingDirectory'
+              inputs:
+                Contents: |
+                  $(Build.Repository.LocalPath)/**/*.sql
+                TargetFolder: '$(Build.ArtifactStagingDirectory)'
+                preserveTimestamp: true
+
+            - script: |
+                cd ~/bin 
+                ACCOUNT_LOCATOR_REGION=$(./snowsql -a ${{ variables.mainAccountLocatorRegion }} -u $(mainAccountUserName) -w $(mainAccountWarehouseName) -r 'ORGADMIN' -q "CALL util_db.utils.get_account_locator('${{ variables.accountName }}');"  -o friendly=False -o header=False -o output_format=plain -o timing=False -o exit_on_error=true)
+                ACCOUNT_LOCATOR=${ACCOUNT_LOCATOR_REGION%%.*}
+                echo $ACCOUNT_LOCATOR_REGION
+        
+                echo "##vso[task.setvariable variable=accountLocatorRegion;]$ACCOUNT_LOCATOR_REGION"  
+                echo "##vso[task.setvariable variable=accountLocator;]$ACCOUNT_LOCATOR"
+              displayName: Try get account locator
+              env:
+                SNOWSQL_PWD: $(mainAccountPasswordKvSecret)
+
+            - bash: |
+                echo "##[error]Account not found and createNewAccount is false."
+                echo "##[error]Set createNewAccount to true if you want to create a new Snowflake account."
+                exit 1
+              displayName: Validate new account creation
+              condition: and(eq(variables.accountLocatorRegion, 'NULL'), eq('${{ parameters.createNewAccount }}', false))
+
+            - task: Bash@3
+              condition: and(eq(variables.accountLocatorRegion, 'NULL'), eq('${{ parameters.createNewAccount }}', true))
+              displayName: Generate random password for admin user
+              inputs:
+                targetType: 'inline'
+                script: |
+                  PWD=$(openssl rand -base64 32)
+                  echo "##vso[task.setvariable variable=accountAdminPassword;issecret=true;]$PWD"
+  
+            - script: |
+                cd ~/bin 
+                ./snowsql -a ${{ variables.mainAccountLocatorRegion }} -u $(mainAccountUserName) -w $(mainAccountWarehouseName) -r 'ORGADMIN' -q "CREATE ACCOUNT ${{ variables.accountName }} admin_name = $(accountAdminUserName) admin_password = '$(accountAdminPassword)' must_change_password = FALSE  email = '$(accountAdminEmail)' edition = ${{ parameters.edition }} region = ${{ parameters.azureRegionId }}" -o exit_on_error=true 
+              condition: and(eq(variables.accountLocatorRegion, 'NULL'), eq('${{ parameters.createNewAccount }}', true))
+              displayName: Create account
+              env:
+                SNOWSQL_PWD: $(mainAccountPasswordKvSecret)
+
+            - task: AzureCLI@2
+              condition: and(eq(variables.accountLocatorRegion, 'NULL'), eq('${{ parameters.createNewAccount }}', true))
+              displayName: 'Add secret to key vault'
+              inputs:
+                azureSubscription: ${{ parameters.keyVaultSubscriptionName }} 
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                  az keyvault secret set --vault-name ${{ parameters.keyVaultName }}  --name $(dataEngineeringServicePasswordSecretName) --value $(accountAdminPassword)
+
+            - script: |
+                cd ~/bin 
+                ACCOUNT_LOCATOR_REGION=$(./snowsql -a ${{ variables.mainAccountLocatorRegion }} -u $(mainAccountUserName) -w $(mainAccountWarehouseName) -r 'ORGADMIN' -o exit_on_error=true -q "CALL util_db.utils.get_account_locator('${{ variables.accountName }}');"  -o friendly=False -o header=False -o output_format=plain -o timing=False -o exit_on_error=true)
+                ACCOUNT_LOCATOR=${ACCOUNT_LOCATOR_REGION%%.*}
+                echo $ACCOUNT_LOCATOR_REGION
+
+                echo "##vso[task.setvariable variable=accountLocatorRegion;]$ACCOUNT_LOCATOR_REGION"  
+                echo "##vso[task.setvariable variable=accountLocator;]$ACCOUNT_LOCATOR"
+              condition: and(eq(variables.accountLocatorRegion, 'NULL'), eq('${{ parameters.createNewAccount }}', true))
+              displayName: Try get new account locator 
+              env:
+                SNOWSQL_PWD: $(mainAccountPasswordKvSecret)              
+
+            - task: Bash@3
+              condition: eq(variables.accountLocatorRegion, 'NULL')
+              displayName: Fail if account still does not exist
+              inputs:
+                targetType: 'inline'
+                script: |
+                  echo 'Failed to create account'
+                  exit 1
+
+            - task: AzureKeyVault@1
+              displayName: 'Get admin password from key vault'
+              inputs:
+                azureSubscription: ${{ parameters.keyVaultSubscriptionName }} 
+                KeyVaultName: ${{ parameters.keyVaultName }}
+                SecretsFilter: $(dataEngineeringServicePasswordSecretName)
+                RunAsPreJob: false     
+
+            - task: Bash@3
+              displayName: Generate random password for deployment user
+              inputs:
+                targetType: 'inline'
+                script: |
+                  PWD=$(openssl rand -base64 32)
+                  echo "##vso[task.setvariable variable=deploymentUserPassword;issecret=true;]$PWD"
+
+            - task: AzureCLI@2
+              displayName: 'Add secret to key vault'
+              inputs:
+                azureSubscription: ${{ parameters.keyVaultSubscriptionName }} 
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                  az keyvault secret set --vault-name ${{ parameters.keyVaultName }}  --name $(deploymentPipelineUserPasswordSecretName) --value $(deploymentUserPassword)
+
+            # It takes about 30 seconds for the DNS changes to propagate before the newly created account is accessible
+            - task: AzureCLI@2
+              displayName: Sleep for 30 seconds
+              condition: eq('${{ parameters.createNewAccount }}', true)
+              inputs:
+                azureSubscription: '${{ parameters.keyVaultSubscriptionName }}'
+                scriptType: 'bash'
+                scriptLocation: 'inlineScript'
+                inlineScript: sleep 30
+
+            - script: |
+                cd ~/bin 
+                ./snowsql -a $(accountLocatorRegion) -u $(accountAdminUserName) -r 'SYSADMIN' -f $(Build.ArtifactStagingDirectory)/account/setup.sql --variable deployment_user_password=$(deploymentUserPassword) --variable account_locator=$(accountLocator) -o exit_on_error=true
+              displayName: Run setup account script
+              env:
+                SNOWSQL_PWD: $(dataEngineeringServicePasswordKvSecret)
+
+            - ${{ each environment in parameters.environments }}:
+              - ${{ each folder in parameters.foldersToDeploy }}:
+                - script: schemachange -f $(Build.ArtifactStagingDirectory)/${{ folder }} -a $(accountLocatorRegion) -u $(accountAdminUserName) -r 'deployment_pipeline' -w deployment_pipeline_wh  -d util_db  -c util_db.schemachange.change_history --create-change-history-table --vars '{"environment":"${{ environment }}", "customerAbbrv":"${{ parameters.customerAbbrv }}", "accountName":"${{ variables.accountName }}", "defaultRole":"deployment_pipeline", "isCustomerAccount":${{ convertToJson(parameters.isCustomerAccount) }}, "hasAnalyticsDb":${{ convertToJson(parameters.hasAnalyticsDb) }}, "hasDsSandboxDb":${{ convertToJson(parameters.hasDsSandboxDb) }}, "hasMonitoringDb":${{ convertToJson(parameters.hasMonitoringDb) }},"hasSustainabilityDb":${{ convertToJson(parameters.hasSustainabilityDb) }}}' 
+                  displayName: 'Deploy [${{ folder }}]'
+                  env:
+                    SNOWFLAKE_PASSWORD: $(dataEngineeringServicePasswordKvSecret)                 
+
+            
+            - ${{ each environment in parameters.environments }}:
+              - ${{ each folder in parameters.envFoldersToDeploy }}:
+                - script: schemachange -f $(Build.ArtifactStagingDirectory)/environment/${{ folder }} -a $(accountLocatorRegion) -u $(accountAdminUserName) -r 'deployment_pipeline' -w deployment_pipeline_wh  -d util_db  -c util_db.schemachange.change_history --create-change-history-table --vars '{"environment":"${{ environment }}", "customerAbbrv":"${{ parameters.customerAbbrv }}", "accountName":"${{ variables.accountName }}", "defaultRole":"deployment_pipeline", "accountLocator":"$(accountLocator)", "azTenantId":"${{ variables.azTenantId }}", "stagingStorageAccount":"${{ parameters.stagingStorageAccount }}", "createIntegrations":${{ convertToJson(parameters.createIntegrations) }}}'
+                  displayName: 'Deploy [${{ environment }}/${{ folder }}]'
+                  env:
+                    SNOWFLAKE_PASSWORD: $(dataEngineeringServicePasswordKvSecret)
+
+            - template: ../generic/steps-post-deployment.yaml
+              parameters:
+                  keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+                  keyVaultName: ${{ parameters.keyVaultName }}

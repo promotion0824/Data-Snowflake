@@ -1,0 +1,92 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environment
+  type: object
+  default: ['dev']
+
+- name: accounts
+  type: object
+  default: ['cr03187', 'pn13441', 'yk93061', 'ee96414', 'kw66019', 'hf25304']
+
+- name: action
+  type: string
+  default: 'RESUME'  #'SUSPEND'
+  
+- name: tasksToUpdate
+  type: object
+  default: ['raw.create_table_raw_sites_tk','raw.merge_impact_scores_stream_tk','raw.merge_insights_stream_tk','raw.merge_site_core_floors_stream_tk','raw.merge_total_elec_energy_sensors_stream_tk','raw.merge_workflow_core_tickets_stream_tk','raw.process_custom_customer_stage_stream_tk','raw.process_stage_data_loader_stream_tk','raw.trigger_merge_ontology_models_tk','transformed.create_table_transformed_hvac_equipment_tk','transformed.merge_directory_core_sites_stream_tk','transformed.create_table_transformed_sites_tk','transformed.merge_telemetry_late_arriving_twins_tk','transformed.merge_twins_stream_tk','transformed.trigger_insert_site_defaults_tk','transformed.create_agg_ccure_15minute_tk','transformed.create_table_connectivity_energy_materialized_tk','transformed.create_table_transformed_capabilities_assets_details_tk','transformed.create_table_transformed_capabilities_assets_tk','transformed.create_table_transformed_capabilities_zones_tk','transformed.create_table_transformed_companies_tk','transformed.create_table_transformed_hvac_adjusted_capabilities_tk','transformed.create_table_transformed_levels_buildings_tk','transformed.create_table_transformed_spaces_levels_tk','transformed.electrical_metering_assets_tk','transformed.merge_agg_electrical_metering_hourly_tk','transformed.merge_agg_electrical_metering_daily_tk','transformed.merge_agg_site_daily_energy_scores_tk','transformed.merge_ccure_15minute_tk','transformed.merge_ccure_time_series_15minute_tk','transformed.merge_ccure_trend_id_15minute_tk','transformed.merge_facit_15minute_tk','transformed.merge_facit_time_series_15minute_tk','transformed.merge_facit_trend_id_15minute_tk','transformed.merge_site_volume_by_month_tk','transformed.merge_sites_hourly_temperature_tk','transformed.merge_sites_weather_data_tk','transformed.merge_twins_relationships_stream_tk','transformed.tenant_electrical_metering_detail_tk','transformed.trigger_insert_air_temperature_measurements_tk','transformed.trigger_insert_return_air_temperature_measurements_tk','transformed.trigger_insert_zone_air_temp_measurements_tk','transformed.trigger_merge_air_temperature_assets_tk','transformed.trigger_merge_air_temperature_hourly_metrics_tk','transformed.trigger_merge_air_temperature_setpoints_tk','transformed.trigger_merge_return_air_temperature_assets_tk','transformed.trigger_merge_return_air_temperature_hourly_metrics_tk','transformed.trigger_merge_return_air_temperature_setpoints_tk','transformed.trigger_merge_zone_air_temp_assets_tk','transformed.trigger_merge_zone_air_temp_hourly_metrics_tk','transformed.trigger_merge_zone_air_temp_setpoints_tk', 'transformed.merge_agg_occupancy_15minute_tk']
+ 
+- name: keyVaultSubscriptionName
+  type: string
+  default: az-data-prd-Data
+ 
+- name: keyVaultName
+  type: string
+  default: 'kv-dsecore-sf-prod'
+
+variables:
+- template: ../vars/vars-global.yaml
+
+stages:
+- ${{ each environment in parameters.environment }}:
+    - stage: ${{ environment }}_snowflake_accounts_deploy
+      variables: 
+          environmentName: ${{ format('data-core-snowflake-{0}', lower(environment)) }}
+      # this deploy job is for setting the environments for approval
+      jobs:
+      - ${{ each account in parameters.accounts }}:
+        - deployment: Update_tasks_in_${{ account }}_${{ environment }}
+          displayName: Updating tasks in ${{ account }} (${{ environment }})
+          environment: ${{ variables.environmentName }} 
+          variables: 
+            - template: ../vars/vars-${{ account }}.yaml
+            - name: agentIpAddress
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                    - template: ../steps-pre-deployment-realEstate.yaml
+                      parameters:
+                          keyVaultSubscriptionName: ${{ parameters.keyVaultSubscriptionName }} 
+                          keyVaultName: ${{ parameters.keyVaultName }} 
+
+                    - bash: echo '##vso[task.setvariable variable=sfAccountName]${{ account }}.$(region)'
+                      displayName: Set account ${{ account }}.$(region)
+
+                    # create table if not exists
+                    - script: |
+                        cd ~/bin 
+                        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -q "CREATE TABLE IF NOT EXISTS util_db.public.devops_pipeline_runs (pipeline_run_start TIMESTAMP_NTZ(9), pipeline_run_end TIMESTAMP_NTZ(9), pipeline_name  VARCHAR(4000), build_number  VARCHAR(4000), snowflake_account VARCHAR(4000), env_variable VARCHAR(4000), trigger_event  VARCHAR(4000), environment_name VARCHAR(4000), source_branch  VARCHAR(4000), source_version  VARCHAR(4000), commit_comment  VARCHAR(4000), queued_by  VARCHAR(4000), triggered_by_id VARCHAR(4000), build_uri  VARCHAR(4000), job_status  VARCHAR(4000), agent_os  VARCHAR(4000));" 
+                      displayName: snowsql create table devops_pipeline_runs if not exists
+                      env:
+                        SNOWSQL_PWD: $(acctPwd)
+
+                    # insert pipeline data
+                    - script: |
+                        cd ~/bin 
+                        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -q "INSERT INTO util_db.public.devops_pipeline_runs SELECT SYSDATE(),NULL,'$(Build.DefinitionName)','$(Build.BuildNumber)','$(sfAccountName)','${{ environment }}','$(Build.Reason)','${{ parameters.environmentName }}-${{ environment }}','$(Build.SourceBranch)','$(Build.SourceVersion)', NULL, '$(Build.QueuedBy)','$(Build.RequestedForId)','$(Build.BuildUri)','$(Agent.JobStatus)','$(Agent.OS)'; " 
+                      displayName: snowsql inserting pipeline build variables
+                      env:
+                        SNOWSQL_PWD: $(acctPwd)
+
+                    # update tasks
+                    - ${{ each taskName in parameters.tasksToUpdate }}: 
+                            - script: |
+                                cd ~/bin 
+                                ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -q "USE DATABASE ${{ environment }}_db;  ALTER TASK IF EXISTS ${{ taskName }} ${{ parameters.action }};" 
+                              displayName: snowsql update task status
+                              env:
+                                SNOWSQL_PWD: $(acctPwd)
+
+                    # update remaining tasks with dependencies
+                    - script: |
+                        cd ~/bin 
+                        ./snowsql -a '$(sfAccountName)' -u $(sfUsername) -w $(sfWarehouse) -r $(sfRole) -q "USE DATABASE ${{ environment }}_db; ALTER TASK transformed.MERGE_TWINS_STREAM_TK SUSPEND; SELECT system\$task_dependents_enable('transformed.MERGE_TWINS_STREAM_TK'); ALTER TASK transformed.MERGE_TWINS_STREAM_TK RESUME; ALTER TASK transformed.MERGE_TELEMETRY_STREAM_TK SUSPEND; SELECT system\$task_dependents_enable('transformed.MERGE_TELEMETRY_STREAM_TK'); ALTER TASK transformed.MERGE_TELEMETRY_STREAM_TK RESUME;ALTER TASK TRANSFORMED.MERGE_AGG_ELECTRICAL_METERING_HOURLY_TK SUSPEND; SELECT system\$task_dependents_enable('TRANSFORMED.MERGE_AGG_ELECTRICAL_METERING_HOURLY_TK'); ALTER TASK TRANSFORMED.MERGE_AGG_ELECTRICAL_METERING_HOURLY_TK RESUME;"
+                      displayName: snowsql update remaining tasks with dependencies
+                      env:
+                        SNOWSQL_PWD: $(acctPwd)

@@ -1,0 +1,16 @@
+-- ******************************************************************************************************************************
+-- Task to trigger stored procedure
+-- ******************************************************************************************************************************
+
+CREATE OR REPLACE TASK transformed.merge_dataloader_copyactivity_tk
+  USER_TASK_MANAGED_INITIAL_WAREHOUSE_SIZE = 'XSMALL'
+  -- Once per day 20 minutes after midnight
+  SCHEDULE = 'USING CRON 20 00 * * * UTC'
+  USER_TASK_TIMEOUT_MS = 1200000
+  SUSPEND_TASK_AFTER_NUM_FAILURES = 5
+  ERROR_INTEGRATION = error_{{ environment }}_nin
+AS
+  CALL transformed.merge_dataloader_copyactivity_sp(SYSTEM$CURRENT_USER_TASK_NAME());
+
+ALTER TASK IF EXISTS transformed.merge_dataloader_copyactivity_tk RESUME
+;

@@ -1,0 +1,37 @@
+variables:
+
+- name: accountName
+  value: 'wo77920'
+  
+- name: region
+  value: 'australia-east.azure'
+
+- name: customerName
+  value: wil
+
+- name: accountType
+  value: 'internal'
+  
+- name: sfUsername
+  value: deployment_pipeline_usr
+  
+- name: acctPwd
+  value: $(sf-wilaue1-deploymentpipelineusr-password)
+  
+- name: sfWarehouse
+  value: COMPUTE_WH
+
+- name: sfRole
+  value: deployment_pipeline
+  
+- name: snowsqlSecretsFilter
+  value: 'sf-wilaue1-deploymentpipelineusr-password'
+  
+- name: controlDb
+  value: 'util_db'
+
+- name: azureRegionIdentifier
+  value: 'aue1'    
+
+- name: azureRegion
+  value: 'australiaeast'    

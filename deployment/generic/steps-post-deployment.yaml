@@ -1,0 +1,20 @@
+parameters:
+- name: keyVaultSubscriptionName
+  type: string
+
+- name: keyVaultName
+  type: string
+
+steps:
+  - bash: echo ""
+    displayName: "# Post-deployment steps"
+
+  - task: AzureCLI@2
+    displayName: 'Remove temp key vault firewall rule'
+    condition: always()
+    inputs:
+      azureSubscription: ${{ parameters.keyVaultSubscriptionName }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az keyvault network-rule remove  --name ${{ parameters.keyVaultName }} --ip-address $(agentIpAddress) 

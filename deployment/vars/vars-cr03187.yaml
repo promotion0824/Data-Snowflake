@@ -1,0 +1,37 @@
+variables:
+
+- name: accountName
+  value: 'cr03187'
+  
+- name: region
+  value: 'west-europe.azure'
+  
+- name: customerName
+  value: axa
+
+- name: accountType
+  value: 'customer'
+  
+- name: sfUsername
+  value: deployment_pipeline_usr
+  
+- name: acctPwd
+  value: $(sf-axaweu-deploymentpipelineusr-password)
+  
+- name: sfWarehouse
+  value: deployment_pipeline_wh
+
+- name: sfRole
+  value: deployment_pipeline
+  
+- name: snowsqlSecretsFilter
+  value: 'sf-axaweu-deploymentpipelineusr-password'
+
+- name: controlDb
+  value: 'util_db'
+
+- name: azureRegionIdentifier
+  value: 'weu'  
+
+- name: azureRegion
+  value: 'westeurope'    
